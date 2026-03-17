@@ -1,11 +1,25 @@
-# Bashkuto
+<div align="center">
 
-**Bash infrastructure for AI agents**
+# bashkuto
+
+![Alt text](images/bashkuto-logo.png)
+
+</div>
 
 Bashkuto is a lightweight Python library that transforms Bash environments into agent-friendly runtimes. It provides AI agents with safe, structured, and efficient command execution capabilities with built-in safeguards for production use.
 
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![PyPI version](https://img.shields.io/pypi/v/BashkutoPackage.svg)](https://pypi.org/project/BashkutoPackage/)
+[![GitHub stars](https://img.shields.io/github/stars/KadriSof/BashkutoPackage.svg?style=social)](https://github.com/KadriSof/BashkutoPackage)
+[![GitHub issues](https://img.shields.io/github/issues/KadriSof/BashkutoPackage.svg)](https://github.com/KadriSof/BashkutoPackage/issues)
+[![GitHub forks](https://img.shields.io/github/forks/KadriSof/BashkutoPackage.svg)](https://github.com/KadriSof/BashkutoPackage/network)
+[![CI Status](https://img.shields.io/github/actions/workflow/status/KadriSof/BashkutoPackage/ci.yml?branch=main)](https://github.com/KadriSof/BashkutoPackage/actions)
+[![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
+[![Documentation Status](https://readthedocs.org/projects/bashkuto/badge/?version=latest)](https://bashkuto.readthedocs.io/en/latest/?badge=latest)
+
+
+---
 
 ## Features
 
