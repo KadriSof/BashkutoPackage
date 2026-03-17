@@ -81,6 +81,14 @@ runtime = BashRuntime(
 result = runtime.run("your-command")
 ```
 
+#### 🐚 Shell Compatibility Note
+
+Bashkuto uses your system's shell executables. For the best experience with **`BashSession` persistence** and state tracking:
+- **Unix/Linux/macOS:** Use POSIX-compliant shells like `bash` (preferred), `sh`, or `zsh`.
+- **Windows:** Use `cmd.exe` (preferred). 
+
+While other shells like `fish` or `PowerShell` can be used for single commands, their unique syntax may interfere with automatic state tracking (like `cd` persistence) in `BashSession`.
+
 ### CommandResult
 
 Dataclass containing command execution results.

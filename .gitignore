@@ -102,3 +102,4 @@ Desktop.ini
 
 # Hatch build directory
 .hatch/
+.aider*
