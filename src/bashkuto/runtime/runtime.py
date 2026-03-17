@@ -1,10 +1,12 @@
 """Bash runtime orchestration."""
 
 import logging
+import os
+import shutil
 
-from typing import List, Optional
+from typing import Dict, List, Optional
 
-from .executor import execute, get_default_shell
+from .executor import execute, execute_async, get_default_shell
 from .result import CommandResult
 from .guards import (
     check_command,
@@ -38,7 +40,7 @@ class BashRuntime:
         overflow_max_age_hours: int = 24,
         overflow_max_size_mb: int = 100,
         cwd: Optional[str] = None,
-        env: Optional[dict] = None,
+        env: Optional[Dict[str, str]] = None,
     ):
         """
         Initialize BashRuntime.
@@ -53,14 +55,15 @@ class BashRuntime:
             overflow_max_age_hours: Max age of overflow files
             overflow_max_size_mb: Max size of overflow directory
             cwd: Working directory for commands
-            env: Environment variables for commands
+            env: Environment variables for commands (replaces os.environ if provided)
+                 Note: To extend os.environ, pass os.environ.copy() | your_vars
         """
         self.shell = shell if shell is not None else get_default_shell()
         self.timeout_sec = timeout_sec
         self.max_output_chars = max_output_chars
         self.overflow_dir = overflow_dir
         self.cwd = cwd
-        self.env = env
+        self.env = env or os.environ.copy()
 
         # Combine default and custom blocked commands
         self.blocked_substrings = (
@@ -77,9 +80,19 @@ class BashRuntime:
             max_size_mb=overflow_max_size_mb,
         )
 
+        self._validate_shell()
+
         logger.debug(
-            f"BashRuntime initialized: shell={shell}, timeout={timeout_sec}s"
+            f"BashRuntime initialized: shell={self.shell}, timeout={timeout_sec}s, cwd={cwd}"
         )
+
+    def _validate_shell(self) -> None:
+        """Verify that the configured shell is available and executable."""
+        if not shutil.which(self.shell):
+            raise BashkutoError(
+                f"Invalid shell: '{self.shell}' was not found or is not executable. "
+                "Please provide a valid path to a shell executable (e.g., '/bin/bash' or 'cmd.exe')."
+            )
 
     def run(self, command: str) -> CommandResult:
         """
@@ -112,40 +125,12 @@ class BashRuntime:
                 command=command,
                 shell=self.shell,
                 timeout_sec=self.timeout_sec,
+                cwd=self.cwd,
+                env=self.env
             )
             logger.info(f"Completed: exit_code={code}, duration={duration}ms")
 
-            # Check for binary output
-            if is_binary(stdout):
-                logger.debug("Binary output detected, suppressing")
-                return CommandResult(
-                    output="[binary output suppressed]",
-                    stderr="",
-                    exit_code=code,
-                    duration_ms=duration,
-                )
-
-            # Decode output
-            text_out = stdout.decode("utf-8", errors="replace")
-            text_err = stderr.decode("utf-8", errors="replace")
-
-            # Handle overflow
-            text_out, truncated, overflow_file = (
-                self.overflow_manager.truncate_output(
-                    text_out, self.max_output_chars
-                )
-            )
-            if truncated:
-                logger.debug(f"Output truncated, saved to: {overflow_file}")
-
-            return CommandResult(
-                output=text_out,
-                stderr=text_err,
-                exit_code=code,
-                duration_ms=duration,
-                truncated=truncated,
-                overflow_file=overflow_file,
-            )
+            return self._process_result(stdout, stderr, code, duration)
 
         except BashkutoError:
             # Re-raise our custom errors
@@ -153,3 +138,81 @@ class BashRuntime:
         except Exception as e:
             logger.error(f"Unexpected error: {e}")
             raise BashkutoError(f"Command execution failed: {e}") from e
+
+    async def run_async(self, command: str) -> CommandResult:
+        """
+        Execute a command asynchronously and return the result.
+
+        Args:
+            command: The command string to execute
+
+        Returns:
+            CommandResult with output and metadata
+        """
+        logger.info(f"Executing async: {command[:100]}...")
+
+        try:
+            # Security check
+            check_command(
+                command,
+                self.blocked_substrings,
+                self.blocked_patterns,
+            )
+            
+            # Execute command
+            stdout, stderr, code, duration = await execute_async(
+                command=command,
+                shell=self.shell,
+                timeout_sec=self.timeout_sec,
+                cwd=self.cwd,
+                env=self.env
+            )
+            logger.info(f"Async completed: exit_code={code}, duration={duration}ms")
+
+            return self._process_result(stdout, stderr, code, duration)
+
+        except BashkutoError:
+            raise
+        except Exception as e:
+            logger.error(f"Unexpected async error: {e}")
+            raise BashkutoError(f"Async command execution failed: {e}") from e
+
+    def _process_result(
+        self,
+        stdout: bytes,
+        stderr: bytes,
+        code: int,
+        duration: int
+    ) -> CommandResult:
+        """Common result processing logic."""
+        # Check for binary output
+        if is_binary(stdout):
+            logger.debug("Binary output detected, suppressing")
+            return CommandResult(
+                output="[binary output suppressed]",
+                stderr="",
+                exit_code=code,
+                duration_ms=duration,
+            )
+
+        # Decode output
+        text_out = stdout.decode("utf-8", errors="replace")
+        text_err = stderr.decode("utf-8", errors="replace")
+
+        # Handle overflow
+        text_out, truncated, overflow_file = (
+            self.overflow_manager.truncate_output(
+                text_out, self.max_output_chars
+            )
+        )
+        if truncated:
+            logger.debug(f"Output truncated, saved to: {overflow_file}")
+
+        return CommandResult(
+            output=text_out,
+            stderr=text_err,
+            exit_code=code,
+            duration_ms=duration,
+            truncated=truncated,
+            overflow_file=overflow_file,
+        )
