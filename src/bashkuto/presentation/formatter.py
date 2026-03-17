@@ -54,12 +54,20 @@ class OutputFormatter:
             output_lines = result.output.strip().split("\n")
             if len(output_lines) > self.max_context_lines:
                 # Smart truncation: show beginning and end
-                keep = self.max_context_lines // 2
-                lines.extend(output_lines[:keep])
-                lines.append(
-                    f"... {len(output_lines) - self.max_context_lines} lines omitted ..."
-                )
-                lines.extend(output_lines[-keep:])
+                keep_head = self.max_context_lines // 2
+                keep_tail = self.max_context_lines - keep_head
+
+                # Handle edge case where max_context_lines is too small
+                if keep_head == 0:
+                    lines.append(
+                        f"[TRUNCATED] Output exceeds {self.max_context_lines} lines limit"
+                    )
+                else:
+                    lines.extend(output_lines[:keep_head])
+                    omitted = len(output_lines) - (keep_head + keep_tail)
+                    lines.append(f"... {omitted} lines omitted ...")
+                    if keep_tail > 0:
+                        lines.extend(output_lines[-keep_tail:])
             else:
                 lines.append(result.output.strip())
 
