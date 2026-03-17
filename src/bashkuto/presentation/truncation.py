@@ -87,8 +87,12 @@ class OverflowManager:
         cutoff = time.time() - (self.max_age_hours * 3600)
 
         for file in self.overflow_dir.glob("cmd_*.txt"):
-            if file.stat().st_mtime < cutoff:
-                file.unlink()
+            try:
+                if file.stat().st_mtime < cutoff:
+                    file.unlink()
+            except OSError:
+                # File may have been deleted or inaccessible; continue
+                pass
 
     def _cleanup_by_size(self):
         """Remove oldest files if directory exceeds size limit."""
@@ -100,16 +104,22 @@ class OverflowManager:
         except OSError:
             return
 
-        total_size_mb = sum(f.stat().st_size for f in files) / (1024 * 1024)
+        # Calculate total size, guarding against disappearing files
+        def safe_size(f: Path) -> int:
+            try:
+                return f.stat().st_size
+            except OSError:
+                return 0
+
+        total_size_mb = sum(safe_size(f) for f in files) / (1024 * 1024)
 
         while files and total_size_mb > self.max_size_mb:
             oldest = files.pop(0)
             try:
                 oldest.unlink()
-                total_size_mb = sum(
-                    f.stat().st_size for f in files
-                ) / (1024 * 1024)
+                total_size_mb = sum(safe_size(f) for f in files) / (1024 * 1024)
             except OSError:
+                # File may have been deleted or inaccessible; continue
                 break
 
 
