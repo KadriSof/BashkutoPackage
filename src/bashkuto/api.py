@@ -4,6 +4,7 @@ from typing import Optional
 
 from .runtime.runtime import BashRuntime
 from .runtime.result import CommandResult
+from .runtime.session import BashSession
 
 
 # Default runtime instance for convenience functions
@@ -51,3 +52,17 @@ def run_structured(command: str) -> CommandResult:
     """
     runtime = get_default_runtime()
     return runtime.run(command)
+
+
+async def run_async(command: str) -> CommandResult:
+    """
+    Execute a command asynchronously and return structured result.
+
+    Args:
+        command: The command string to execute
+
+    Returns:
+        CommandResult with structured data
+    """
+    runtime = get_default_runtime()
+    return await runtime.run_async(command)
