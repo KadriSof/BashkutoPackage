@@ -185,19 +185,21 @@ class BashRuntime:
         duration: int
     ) -> CommandResult:
         """Common result processing logic."""
+        # Decode stderr first for error reporting (even if stdout is binary)
+        text_err = stderr.decode("utf-8", errors="replace")
+
         # Check for binary output
         if is_binary(stdout):
             logger.debug("Binary output detected, suppressing")
             return CommandResult(
                 output="[binary output suppressed]",
-                stderr="",
+                stderr=text_err,
                 exit_code=code,
                 duration_ms=duration,
             )
 
         # Decode output
         text_out = stdout.decode("utf-8", errors="replace")
-        text_err = stderr.decode("utf-8", errors="replace")
 
         # Handle overflow
         text_out, truncated, overflow_file = (
