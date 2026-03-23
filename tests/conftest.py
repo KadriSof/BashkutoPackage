@@ -13,7 +13,7 @@ def temp_dir():
     """Create a temporary directory for tests."""
     dirpath = tempfile.mkdtemp()
     yield Path(dirpath)
-    shutil.rmtree(dirpath, ignore_errors=True)
+    shutil.rmtree(dirpath)
 
 
 @pytest.fixture

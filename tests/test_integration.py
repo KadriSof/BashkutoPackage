@@ -123,7 +123,8 @@ class TestOverflowIntegration:
         assert os.path.exists(result.overflow_file)
 
         # Verify file content
-        content = open(result.overflow_file).read()
+        with open(result.overflow_file, encoding="utf-8") as f:
+            content = f.read()
         assert len(content) > 100
 
 
