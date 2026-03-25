@@ -11,6 +11,7 @@ from .runtime.exceptions import (
     BinaryOutputError,
     OverflowError,
 )
+from .runtime.tool_registry import ToolRegistry
 from .presentation.formatter import OutputFormatter, format_result
 
 __all__ = [
@@ -19,6 +20,7 @@ __all__ = [
     "BashSession",
     "BashRuntime",
     "CommandResult",
+    "ToolRegistry",
     # Exceptions
     "BashkutoError",
     "SecurityError",

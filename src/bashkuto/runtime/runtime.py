@@ -3,6 +3,7 @@
 import logging
 import os
 import shutil
+import shlex
 
 from typing import Dict, List, Optional
 
@@ -13,7 +14,8 @@ from .guards import (
     BLOCKED_SUBSTRINGS,
     BLOCKED_PATTERNS,
 )
-from .exceptions import BashkutoError
+from .exceptions import BashkutoError, SecurityError
+from .tool_registry import ToolRegistry
 from ..presentation.truncation import OverflowManager
 from ..presentation.binary_guard import is_binary
 
@@ -41,6 +43,9 @@ class BashRuntime:
         overflow_max_size_mb: int = 100,
         cwd: Optional[str] = None,
         env: Optional[Dict[str, str]] = None,
+        tool_dir: Optional[str] = None,
+        tool_blocked_patterns: Optional[List[str]] = None,
+        tool_allowlist: Optional[List[str]] = None,
     ):
         """
         Initialize BashRuntime.
@@ -57,6 +62,9 @@ class BashRuntime:
             cwd: Working directory for commands
             env: Environment variables for commands (replaces os.environ if provided)
                  Note: To extend os.environ, pass os.environ.copy() | your_vars
+            tool_dir: Directory for agent-created tools (default: .bashkuto_tools)
+            tool_blocked_patterns: Additional blocked patterns for tool scripts
+            tool_allowlist: If provided, only allow these commands in tools
         """
         self.shell = shell if shell is not None else get_default_shell()
         self.timeout_sec = timeout_sec
@@ -80,11 +88,110 @@ class BashRuntime:
             max_size_mb=overflow_max_size_mb,
         )
 
+        # Initialize tool registry
+        self.tool_registry = ToolRegistry(
+            tool_dir=tool_dir if tool_dir else ".bashkuto_tools",
+            blocked_patterns=tool_blocked_patterns,
+            tool_allowlist=tool_allowlist,
+        )
+
         self._validate_shell()
 
         logger.debug(
             f"BashRuntime initialized: shell={self.shell}, timeout={timeout_sec}s, cwd={cwd}"
         )
+
+    def create_tool(
+        self,
+        name: str,
+        script: str,
+        description: str = "",
+        created_by: str = "agent",
+    ):
+        """
+        Create a new agent tool.
+
+        Args:
+            name: Tool name (will be used as filename without extension)
+            script: Shell script content
+            description: Optional tool description
+            created_by: Creator identifier (default: "agent")
+
+        Returns:
+            Path to the created tool script
+
+        Raises:
+            SecurityError: If script contains dangerous patterns
+            ValueError: If tool name is invalid
+        """
+        return self.tool_registry.create_tool(
+            name=name,
+            script=script,
+            description=description,
+            created_by=created_by,
+        )
+
+    def list_tools(self) -> List[str]:
+        """List all available tool names."""
+        return self.tool_registry.list_tools()
+
+    def tool_exists(self, name: str) -> bool:
+        """Check if a tool exists."""
+        return self.tool_registry.tool_exists(name)
+
+    def describe_tool(self, name: str):
+        """Get full metadata for a tool."""
+        return self.tool_registry.describe_tool(name)
+
+    def search_tools(self, query: str) -> List[str]:
+        """Search tools by description."""
+        return self.tool_registry.search_tools(query)
+
+    def delete_tool(self, name: str) -> bool:
+        """Delete a tool."""
+        return self.tool_registry.delete_tool(name)
+
+    def export_tools(self, path: str) -> int:
+        """Export all tools to a JSON file."""
+        return self.tool_registry.export_tools(path)
+
+    def import_tools(self, path: str, overwrite: bool = False) -> int:
+        """Import tools from a JSON file."""
+        return self.tool_registry.import_tools(path, overwrite=overwrite)
+
+    def clear_all_tools(self) -> int:
+        """Delete all tools."""
+        return self.tool_registry.clear_all_tools()
+
+    def _resolve_command(self, command: str) -> tuple[Optional[str], List[str]]:
+        """
+        Resolve command to tool or return None for shell execution.
+
+        Args:
+            command: Full command string
+
+        Returns:
+            Tuple of (tool_path, args) if tool exists, (None, args) otherwise
+        """
+        # Parse command into tokens
+        try:
+            tokens = shlex.split(command)
+        except ValueError:
+            # Fallback for Windows or malformed commands
+            tokens = command.split()
+
+        if not tokens:
+            return None, []
+
+        cmd_name = tokens[0]
+        args = tokens[1:]
+
+        # Check if it's a tool
+        tool_path = self.tool_registry.get_tool_path(cmd_name)
+        if tool_path:
+            return str(tool_path), args
+
+        return None, args
 
     def _validate_shell(self) -> None:
         """Verify that the configured shell is available and executable."""
@@ -112,7 +219,34 @@ class BashRuntime:
         logger.info(f"Executing: {command[:100]}...")
 
         try:
-            # Security check
+            # Resolve command (check for tools first)
+            tool_path, args = self._resolve_command(command)
+            
+            if tool_path:
+                # Execute tool
+                logger.debug(f"Resolved to tool: {tool_path}")
+                # Build command: bash <tool_path> <args>
+                tool_command = f'bash "{tool_path}"'
+                if args:
+                    tool_command += " " + " ".join(shlex.quote(arg) for arg in args)
+                
+                # Execute the tool
+                stdout, stderr, code, duration = execute(
+                    command=tool_command,
+                    shell=self.shell,
+                    timeout_sec=self.timeout_sec,
+                    cwd=self.cwd,
+                    env=self.env
+                )
+                
+                # Increment usage count
+                tool_name = command.split()[0]
+                self.tool_registry.increment_usage(tool_name)
+                
+                logger.info(f"Tool completed: exit_code={code}, duration={duration}ms")
+                return self._process_result(stdout, stderr, code, duration)
+            
+            # Security check for shell commands
             check_command(
                 command,
                 self.blocked_substrings,
@@ -120,7 +254,7 @@ class BashRuntime:
             )
             logger.debug("Security check passed")
 
-            # Execute command
+            # Execute command via shell
             stdout, stderr, code, duration = execute(
                 command=command,
                 shell=self.shell,
@@ -152,14 +286,41 @@ class BashRuntime:
         logger.info(f"Executing async: {command[:100]}...")
 
         try:
-            # Security check
+            # Resolve command (check for tools first)
+            tool_path, args = self._resolve_command(command)
+            
+            if tool_path:
+                # Execute tool
+                logger.debug(f"Resolved to tool: {tool_path}")
+                # Build command: bash <tool_path> <args>
+                tool_command = f'bash "{tool_path}"'
+                if args:
+                    tool_command += " " + " ".join(shlex.quote(arg) for arg in args)
+                
+                # Execute the tool
+                stdout, stderr, code, duration = await execute_async(
+                    command=tool_command,
+                    shell=self.shell,
+                    timeout_sec=self.timeout_sec,
+                    cwd=self.cwd,
+                    env=self.env
+                )
+                
+                # Increment usage count
+                tool_name = command.split()[0]
+                self.tool_registry.increment_usage(tool_name)
+                
+                logger.info(f"Tool completed: exit_code={code}, duration={duration}ms")
+                return self._process_result(stdout, stderr, code, duration)
+            
+            # Security check for shell commands
             check_command(
                 command,
                 self.blocked_substrings,
                 self.blocked_patterns,
             )
-            
-            # Execute command
+
+            # Execute command via shell
             stdout, stderr, code, duration = await execute_async(
                 command=command,
                 shell=self.shell,
