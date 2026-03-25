@@ -46,6 +46,7 @@ class BashRuntime:
         tool_dir: Optional[str] = None,
         tool_blocked_patterns: Optional[List[str]] = None,
         tool_allowlist: Optional[List[str]] = None,
+        tool_execution_security: bool = True,
     ):
         """
         Initialize BashRuntime.
@@ -65,6 +66,9 @@ class BashRuntime:
             tool_dir: Directory for agent-created tools (default: .bashkuto_tools)
             tool_blocked_patterns: Additional blocked patterns for tool scripts
             tool_allowlist: If provided, only allow these commands in tools
+            tool_execution_security: If True (default), validate tool invocations
+                against security rules. Set to False to allow tools to execute
+                unrestricted (only recommended for trusted tools in sandboxed environments).
         """
         self.shell = shell if shell is not None else get_default_shell()
         self.timeout_sec = timeout_sec
@@ -80,6 +84,9 @@ class BashRuntime:
         self.blocked_patterns = (
             BLOCKED_PATTERNS + (blocked_patterns or [])
         )
+
+        # Tool execution security policy
+        self.tool_execution_security = tool_execution_security
 
         # Initialize overflow manager
         self.overflow_manager = OverflowManager(
@@ -98,7 +105,8 @@ class BashRuntime:
         self._validate_shell()
 
         logger.debug(
-            f"BashRuntime initialized: shell={self.shell}, timeout={timeout_sec}s, cwd={cwd}"
+            f"BashRuntime initialized: shell={self.shell}, timeout={timeout_sec}s, cwd={cwd}, "
+            f"tool_execution_security={tool_execution_security}"
         )
 
     def create_tool(
@@ -221,15 +229,26 @@ class BashRuntime:
         try:
             # Resolve command (check for tools first)
             tool_path, args = self._resolve_command(command)
-            
+
             if tool_path:
+                # Tool execution security check
+                if self.tool_execution_security:
+                    # Validate the original command string against security rules
+                    # This prevents tools from being used to bypass security
+                    check_command(
+                        command,
+                        self.blocked_substrings,
+                        self.blocked_patterns,
+                    )
+                    logger.debug("Tool invocation security check passed")
+
                 # Execute tool
                 logger.debug(f"Resolved to tool: {tool_path}")
                 # Build command: bash <tool_path> <args>
                 tool_command = f'bash "{tool_path}"'
                 if args:
                     tool_command += " " + " ".join(shlex.quote(arg) for arg in args)
-                
+
                 # Execute the tool
                 stdout, stderr, code, duration = execute(
                     command=tool_command,
@@ -238,14 +257,14 @@ class BashRuntime:
                     cwd=self.cwd,
                     env=self.env
                 )
-                
+
                 # Increment usage count
                 tool_name = command.split()[0]
                 self.tool_registry.increment_usage(tool_name)
-                
+
                 logger.info(f"Tool completed: exit_code={code}, duration={duration}ms")
                 return self._process_result(stdout, stderr, code, duration)
-            
+
             # Security check for shell commands
             check_command(
                 command,
@@ -288,15 +307,26 @@ class BashRuntime:
         try:
             # Resolve command (check for tools first)
             tool_path, args = self._resolve_command(command)
-            
+
             if tool_path:
+                # Tool execution security check
+                if self.tool_execution_security:
+                    # Validate the original command string against security rules
+                    # This prevents tools from being used to bypass security
+                    check_command(
+                        command,
+                        self.blocked_substrings,
+                        self.blocked_patterns,
+                    )
+                    logger.debug("Tool invocation security check passed")
+
                 # Execute tool
                 logger.debug(f"Resolved to tool: {tool_path}")
                 # Build command: bash <tool_path> <args>
                 tool_command = f'bash "{tool_path}"'
                 if args:
                     tool_command += " " + " ".join(shlex.quote(arg) for arg in args)
-                
+
                 # Execute the tool
                 stdout, stderr, code, duration = await execute_async(
                     command=tool_command,
@@ -305,14 +335,14 @@ class BashRuntime:
                     cwd=self.cwd,
                     env=self.env
                 )
-                
+
                 # Increment usage count
                 tool_name = command.split()[0]
                 self.tool_registry.increment_usage(tool_name)
-                
+
                 logger.info(f"Tool completed: exit_code={code}, duration={duration}ms")
                 return self._process_result(stdout, stderr, code, duration)
-            
+
             # Security check for shell commands
             check_command(
                 command,
