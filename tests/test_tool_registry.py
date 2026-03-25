@@ -111,7 +111,8 @@ class TestToolRegistryValidation:
                 name="dangerous",
                 script="rm -rf /"
             )
-        assert "blocked pattern" in str(exc_info.value).lower()
+        # Can be blocked by either substring or pattern check
+        assert "blocked" in str(exc_info.value).lower()
 
     def test_blocks_rm_rf_home(self, tool_registry):
         """Should block rm -rf /home."""
@@ -168,6 +169,17 @@ class TestToolRegistryValidation:
                 name="dangerous",
                 script=":(){ :|:& };:"
             )
+
+    def test_blocks_rm_rf_substring(self, tool_registry):
+        """Should block rm -rf substring (not just regex pattern)."""
+        # This tests that BLOCKED_SUBSTRINGS is enforced, not just regex patterns
+        with pytest.raises(SecurityError) as exc_info:
+            tool_registry.create_tool(
+                name="dangerous",
+                script="rm -rf some_directory"
+            )
+        assert "blocked substring" in str(exc_info.value).lower()
+        assert "rm -rf" in str(exc_info.value)
 
     def test_blocks_chmod_777_root(self, tool_registry):
         """Should block chmod 777 /."""

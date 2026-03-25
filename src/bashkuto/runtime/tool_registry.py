@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Set
 
 from .exceptions import SecurityError
-from .guards import BLOCKED_PATTERNS
+from .guards import BLOCKED_PATTERNS, BLOCKED_SUBSTRINGS
 
 
 class ToolRegistry:
@@ -66,6 +66,13 @@ class ToolRegistry:
         Raises:
             SecurityError: If script contains dangerous patterns
         """
+        # Check blocked substrings (same as check_command for shell commands)
+        for substring in BLOCKED_SUBSTRINGS:
+            if substring in script:
+                raise SecurityError(
+                    f"Script contains blocked substring: '{substring}'"
+                )
+
         # Check blocked patterns
         for pattern, compiled in zip(self._blocked_patterns, self._compiled_patterns):
             if compiled.search(script):
@@ -80,17 +87,17 @@ class ToolRegistry:
             (r'\$\{?\d+\}?', "positional parameter ($1, $2, etc.)"),
             (r'\$[A-Za-z_][A-Za-z0-9_]*', "variable expansion (could be dangerous)"),
         ]
-        
+
         # Only warn about these patterns if they appear in potentially dangerous contexts
         # (e.g., directly after a dangerous command like rm, chmod, dd, etc.)
-        dangerous_commands = ["rm", "chmod", "chown", "dd", "mkfs", "fdisk", "parted", 
+        dangerous_commands = ["rm", "chmod", "chown", "dd", "mkfs", "fdisk", "parted",
                               "shutdown", "reboot", "poweroff", "halt", "curl", "wget"]
-        
+
         for line in script.split("\n"):
             line = line.strip()
             if not line or line.startswith("#"):
                 continue
-            
+
             # Check for dangerous command followed by unquoted variable expansion
             for cmd in dangerous_commands:
                 # Pattern: dangerous_cmd followed by variable that could expand to dangerous args
@@ -102,7 +109,7 @@ class ToolRegistry:
                         f"arguments that could bypass security. Use explicit argument "
                         f"validation instead."
                     )
-        
+
         # Check allowlist if configured
         if self._tool_allowlist is not None:
             # Extract commands from script (simplified: first word of each line)
