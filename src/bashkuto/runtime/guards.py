@@ -4,22 +4,47 @@ from typing import List, Optional
 from .exceptions import SecurityError
 
 
+# Comprehensive blocked patterns for shell command security
+# Used by both guards.py (runtime validation) and tool_registry.py (tool script validation)
+BLOCKED_PATTERNS = [
+    # Root directory deletion
+    r"rm\s+(-[rf]+\s+)*(/\s*$|/home|/etc|/usr|/var|/root)",
+    r"rm\s+-rf\s+/",
+    r"rm\s+-fr\s+/",
+    r"rm\s+-rf\s+\*",          # Current directory wipe
+    # Home directory deletion
+    r"rm\s+(-[rf]+\s+)*~",
+    # Dangerous permissions
+    r"chmod\s+(-R\s+)?777\s+/",
+    # Disk overwriting
+    r">\s*/dev/sd[a-z]",
+    r"echo\s+.*>\s*/dev/sd[a-z]",
+    r"dd\s+.*of=/dev/sd[a-z]",
+    r"dd\s+.*of=/dev/",        # Low-level disk writing (broader)
+    # System control
+    r"\b(shutdown|reboot|poweroff|halt)\b",
+    r"shutdown\s+(-h)?\s+now", # Immediate shutdown (legacy)
+    r"reboot\s*(-f)?",         # Force reboot (legacy)
+    # Remote code execution
+    r"curl\s+.*\|\s*(ba)?sh",
+    r"wget\s+.*\|\s*(ba)?sh",
+    r"curl\s+.*\|\s*bash",
+    r"wget\s+.*\|\s*bash",
+    r"wget\s+.*-O-.*\|\s*(ba)?sh",  # wget pipe to shell (legacy)
+    # Fork bomb
+    r":\(\)\s*\{\s*:\|:&\s*\}\s*;",
+    r":(){ :|:& };:",  # Fork bomb (legacy substring-style)
+    # Filesystem destruction
+    r"mkfs",
+    r"mkfs\.",                 # Filesystem creation (legacy)
+    r"fdisk.*-y",
+    r"parted.*mklabel",
+]
+
+# Simple substring checks for quick validation (runtime)
 BLOCKED_SUBSTRINGS = [
     "rm -rf",
     ":(){ :|:& };:",  # Fork bomb
-]
-
-BLOCKED_PATTERNS = [
-    r"rm\s+-rf\s+/",           # Root directory deletion
-    r"rm\s+-rf\s+\*",          # Current directory wipe
-    r"chmod\s+-R\s+777\s+/",   # Dangerous permissions on root
-    r">\s*/dev/sd[a-z]",       # Disk overwriting
-    r"mkfs\.",                 # Filesystem creation
-    r"dd\s+.*of=/dev/",        # Low-level disk writing
-    r"shutdown\s+(-h)?\s+now", # Immediate shutdown
-    r"reboot\s*(-f)?",         # Force reboot
-    r"curl.*\|\s*(ba)?sh",     # Pipe remote script to shell
-    r"wget.*-O-.*\|\s*(ba)?sh",# wget pipe to shell
 ]
 
 
