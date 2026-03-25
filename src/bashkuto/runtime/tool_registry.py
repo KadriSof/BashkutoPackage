@@ -24,14 +24,22 @@ class ToolRegistry:
         tool_dir: str = ".bashkuto_tools",
         blocked_patterns: Optional[List[str]] = None,
         tool_allowlist: Optional[List[str]] = None,
+        allowlist_mode: str = "permissive",
     ):
         """
         Initialize ToolRegistry.
-        
+
         Args:
             tool_dir: Directory to store tools (default: .bashkuto_tools)
             blocked_patterns: Additional regex patterns to block in scripts
-            tool_allowlist: If provided, only allow these commands in tools
+            tool_allowlist: If provided, only allow these commands in tools.
+                Note: This checks the first command of each line only. Shell
+                metacharacters (pipes, redirects, etc.) are still allowed to
+                enable natural Unix workflows. Security relies primarily on
+                BLOCKED_PATTERNS and BLOCKED_SUBSTRINGS for dangerous commands.
+            allowlist_mode: Deprecated. Kept for API compatibility.
+                All modes now behave as "permissive" to enable AI agent workflows.
+                Security is enforced via BLOCKED_PATTERNS/SUBSTRINGS instead.
         """
         self.tool_dir = Path(tool_dir).resolve()
         self._blocked_patterns: List[str] = (
@@ -44,7 +52,8 @@ class ToolRegistry:
         self._tool_allowlist: Optional[Set[str]] = (
             set(tool_allowlist) if tool_allowlist else None
         )
-        
+        self._allowlist_mode: str = allowlist_mode  # Deprecated, kept for compatibility
+
         # Auto-create tool directory
         self._ensure_tool_dir()
 
@@ -112,7 +121,10 @@ class ToolRegistry:
 
         # Check allowlist if configured
         if self._tool_allowlist is not None:
-            # Extract commands from script (simplified: first word of each line)
+            # Extract commands from script (first word of each non-comment line)
+            # Shell metacharacters (pipes, redirects, etc.) are allowed to enable
+            # natural Unix workflows. Security is enforced via BLOCKED_PATTERNS
+            # and BLOCKED_SUBSTRINGS for dangerous commands.
             lines = script.strip().split("\n")
             for line in lines:
                 line = line.strip()

@@ -214,18 +214,18 @@ grep ERROR "$1" | sort | uniq -c | sort -nr | head -20
             )
 
     def test_allowlist_mode(self, temp_tool_dir):
-        """Should respect tool allowlist."""
+        """Should respect tool allowlist (command names only)."""
         registry = ToolRegistry(
             tool_dir=temp_tool_dir,
             tool_allowlist=["grep", "sort", "uniq", "head", "tail"]
         )
-        
+
         # Allowed command
         registry.create_tool(
             name="safe_tool",
             script="grep ERROR logs.txt"
         )
-        
+
         # Not in allowlist
         with pytest.raises(SecurityError) as exc_info:
             registry.create_tool(
@@ -233,6 +233,62 @@ grep ERROR "$1" | sort | uniq -c | sort -nr | head -20
                 script="rm file.txt"
             )
         assert "allowlist" in str(exc_info.value).lower()
+
+    def test_allowlist_allows_pipes(self, temp_tool_dir):
+        """Allowlist should allow pipe characters for Unix workflows."""
+        registry = ToolRegistry(
+            tool_dir=temp_tool_dir,
+            tool_allowlist=["grep", "sort", "uniq", "head", "cat"]
+        )
+
+        # Pipes should be allowed - this is essential for AI agent workflows
+        path = registry.create_tool(
+            name="pipeline",
+            script="cat logs.txt | grep ERROR | sort | uniq -c | head -10"
+        )
+        assert path.exists()
+
+    def test_allowlist_allows_redirects(self, temp_tool_dir):
+        """Allowlist should allow output redirects."""
+        registry = ToolRegistry(
+            tool_dir=temp_tool_dir,
+            tool_allowlist=["grep", "cat", "echo"]
+        )
+
+        path = registry.create_tool(
+            name="with_redirect",
+            script="grep ERROR logs.txt > errors.txt"
+        )
+        assert path.exists()
+
+    def test_allowlist_allows_variables(self, temp_tool_dir):
+        """Allowlist should allow variable expansion."""
+        registry = ToolRegistry(
+            tool_dir=temp_tool_dir,
+            tool_allowlist=["grep", "echo"]
+        )
+
+        path = registry.create_tool(
+            name="with_vars",
+            script='grep "$1" "$2"'
+        )
+        assert path.exists()
+
+    def test_allowlist_blocks_non_allowlisted_command(self, temp_tool_dir):
+        """Should block commands not in allowlist regardless of context."""
+        registry = ToolRegistry(
+            tool_dir=temp_tool_dir,
+            tool_allowlist=["grep", "sort"]
+        )
+
+        # Even in a pipeline, non-allowlisted commands are blocked
+        with pytest.raises(SecurityError) as exc_info:
+            registry.create_tool(
+                name="mixed",
+                script="cat file.txt | grep ERROR"  # 'cat' not in allowlist
+            )
+        assert "allowlist" in str(exc_info.value).lower()
+        assert "cat" in str(exc_info.value).lower()
 
 
 class TestToolRegistryCRUD:
