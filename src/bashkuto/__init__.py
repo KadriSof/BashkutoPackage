@@ -11,7 +11,21 @@ from .runtime.exceptions import (
     BinaryOutputError,
     OverflowError,
 )
+from .runtime.tool_registry import ToolRegistry
 from .presentation.formatter import OutputFormatter, format_result
+
+# Security module exports (Paragon - centralized security engine)
+from .security import (
+    Paragon,
+    SecurityLevel,
+    ValidationResult,
+    ValidationRule,
+    BlockedSubstringRule,
+    BlockedPatternRule,
+    DangerousCommandRule,
+    CodeInjectionRule,
+    AllowlistRule,
+)
 
 __all__ = [
     # Main API
@@ -19,6 +33,17 @@ __all__ = [
     "BashSession",
     "BashRuntime",
     "CommandResult",
+    "ToolRegistry",
+    # Security (Paragon)
+    "Paragon",
+    "SecurityLevel",
+    "ValidationResult",
+    "ValidationRule",
+    "BlockedSubstringRule",
+    "BlockedPatternRule",
+    "DangerousCommandRule",
+    "CodeInjectionRule",
+    "AllowlistRule",
     # Exceptions
     "BashkutoError",
     "SecurityError",
