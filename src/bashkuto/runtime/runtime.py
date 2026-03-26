@@ -9,15 +9,23 @@ from typing import Dict, List, Optional
 
 from .executor import execute, execute_async, get_default_shell
 from .result import CommandResult
-from .guards import (
-    check_command,
-    BLOCKED_SUBSTRINGS,
-    BLOCKED_PATTERNS,
-)
 from .exceptions import BashkutoError, SecurityError
 from .tool_registry import ToolRegistry
 from ..presentation.truncation import OverflowManager
 from ..presentation.binary_guard import is_binary
+
+# Primary security imports from Paragon
+from ..security import (
+    Paragon,
+    SecurityLevel,
+)
+
+# Backward compatibility: import from guards.py (deprecated)
+from .guards import (
+    BLOCKED_SUBSTRINGS,
+    BLOCKED_PATTERNS,
+    check_command,  # Deprecated, kept for backward compatibility
+)
 
 
 logger = logging.getLogger(__name__)
@@ -29,8 +37,11 @@ class BashRuntime:
 
     Provides command execution with security guards, output handling,
     and structured results optimized for AI agents.
+
+    Supports optional Paragon security engine via dependency injection.
     """
 
+    # TODO-0: [SonarQube-Issue] Method "__init__" has 14 parameters, which is greater than the 13 authorized.
     def __init__(
         self,
         shell: Optional[str] = None,
@@ -47,6 +58,7 @@ class BashRuntime:
         tool_blocked_patterns: Optional[List[str]] = None,
         tool_allowlist: Optional[List[str]] = None,
         tool_execution_security: bool = True,
+        paragon: Optional["Paragon"] = None,
     ):
         """
         Initialize BashRuntime.
@@ -69,6 +81,11 @@ class BashRuntime:
             tool_execution_security: If True (default), validate tool invocations
                 against security rules. Set to False to allow tools to execute
                 unrestricted (only recommended for trusted tools in sandboxed environments).
+            paragon: Optional Paragon security engine for validation.
+                If provided, Paragon will be used for command and script validation.
+                If None, falls back to built-in guards.py validation.
+                When using Paragon, tool_allowlist and blocked patterns are
+                passed to Paragon for consistent validation.
         """
         self.shell = shell if shell is not None else get_default_shell()
         self.timeout_sec = timeout_sec
@@ -88,6 +105,9 @@ class BashRuntime:
         # Tool execution security policy
         self.tool_execution_security = tool_execution_security
 
+        # Store Paragon instance for command validation
+        self._paragon: Optional["Paragon"] = paragon
+
         # Initialize overflow manager
         self.overflow_manager = OverflowManager(
             overflow_dir=overflow_dir,
@@ -95,18 +115,19 @@ class BashRuntime:
             max_size_mb=overflow_max_size_mb,
         )
 
-        # Initialize tool registry
+        # Initialize tool registry with optional Paragon
         self.tool_registry = ToolRegistry(
             tool_dir=tool_dir if tool_dir else ".bashkuto_tools",
             blocked_patterns=tool_blocked_patterns,
             tool_allowlist=tool_allowlist,
+            paragon=paragon,
         )
 
         self._validate_shell()
 
         logger.debug(
             f"BashRuntime initialized: shell={self.shell}, timeout={timeout_sec}s, cwd={cwd}, "
-            f"tool_execution_security={tool_execution_security}"
+            f"tool_execution_security={tool_execution_security}, paragon={paragon is not None}"
         )
 
     def create_tool(
@@ -209,6 +230,27 @@ class BashRuntime:
                 "Please provide a valid path to a shell executable (e.g., '/bin/bash' or 'cmd.exe')."
             )
 
+    def _check_command_security(self, command: str) -> None:
+        """
+        Check command against security rules.
+
+        Uses Paragon if configured, otherwise falls back to guards.check_command().
+
+        Args:
+            command: Command string to validate.
+
+        Raises:
+            SecurityError: If command fails security checks.
+        """
+        if self._paragon is not None:
+            self._paragon.check_command(command)
+        else:
+            check_command(
+                command,
+                self.blocked_substrings,
+                self.blocked_patterns,
+            )
+
     def run(self, command: str) -> CommandResult:
         """
         Execute a command and return the result.
@@ -235,11 +277,7 @@ class BashRuntime:
                 if self.tool_execution_security:
                     # Validate the original command string against security rules
                     # This prevents tools from being used to bypass security
-                    check_command(
-                        command,
-                        self.blocked_substrings,
-                        self.blocked_patterns,
-                    )
+                    self._check_command_security(command)
                     logger.debug("Tool invocation security check passed")
 
                 # Execute tool
@@ -266,11 +304,7 @@ class BashRuntime:
                 return self._process_result(stdout, stderr, code, duration)
 
             # Security check for shell commands
-            check_command(
-                command,
-                self.blocked_substrings,
-                self.blocked_patterns,
-            )
+            self._check_command_security(command)
             logger.debug("Security check passed")
 
             # Execute command via shell
@@ -313,11 +347,7 @@ class BashRuntime:
                 if self.tool_execution_security:
                     # Validate the original command string against security rules
                     # This prevents tools from being used to bypass security
-                    check_command(
-                        command,
-                        self.blocked_substrings,
-                        self.blocked_patterns,
-                    )
+                    self._check_command_security(command)
                     logger.debug("Tool invocation security check passed")
 
                 # Execute tool
@@ -344,11 +374,7 @@ class BashRuntime:
                 return self._process_result(stdout, stderr, code, duration)
 
             # Security check for shell commands
-            check_command(
-                command,
-                self.blocked_substrings,
-                self.blocked_patterns,
-            )
+            self._check_command_security(command)
 
             # Execute command via shell
             stdout, stderr, code, duration = await execute_async(

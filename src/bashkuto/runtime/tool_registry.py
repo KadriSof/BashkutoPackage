@@ -8,15 +8,27 @@ from pathlib import Path
 from typing import Dict, List, Optional, Set
 
 from .exceptions import SecurityError
+
+# Primary security imports from Paragon
+from ..security import (
+    Paragon,
+    BlockedPatternRule,
+    BlockedSubstringRule,
+)
+
+# Backward compatibility: import from guards.py (deprecated)
 from .guards import BLOCKED_PATTERNS, BLOCKED_SUBSTRINGS
 
 
 class ToolRegistry:
     """
     Manages agent-created shell tools.
-    
+
     Tools are stored as executable shell scripts in a dedicated directory.
     Each tool can have associated metadata stored in a JSON file.
+
+    Supports optional Paragon security engine via dependency injection.
+    If no Paragon instance is provided, falls back to built-in validation.
     """
 
     def __init__(
@@ -25,6 +37,7 @@ class ToolRegistry:
         blocked_patterns: Optional[List[str]] = None,
         tool_allowlist: Optional[List[str]] = None,
         allowlist_mode: str = "permissive",
+        paragon: Optional["Paragon"] = None,
     ):
         """
         Initialize ToolRegistry.
@@ -40,6 +53,9 @@ class ToolRegistry:
             allowlist_mode: Deprecated. Kept for API compatibility.
                 All modes now behave as "permissive" to enable AI agent workflows.
                 Security is enforced via BLOCKED_PATTERNS/SUBSTRINGS instead.
+            paragon: Optional Paragon security engine for validation.
+                If provided, Paragon's validate_script() will be used.
+                If None, falls back to built-in _validate_script().
         """
         self.tool_dir = Path(tool_dir).resolve()
         self._blocked_patterns: List[str] = (
@@ -53,6 +69,7 @@ class ToolRegistry:
             set(tool_allowlist) if tool_allowlist else None
         )
         self._allowlist_mode: str = allowlist_mode  # Deprecated, kept for compatibility
+        self._paragon: Optional["Paragon"] = paragon
 
         # Auto-create tool directory
         self._ensure_tool_dir()
@@ -69,49 +86,60 @@ class ToolRegistry:
         """
         Validate script for dangerous patterns.
 
+        If Paragon is configured via dependency injection, delegates to
+        Paragon's validate_script(). Otherwise, uses built-in validation.
+
         Args:
             script: The shell script content to validate
 
         Raises:
             SecurityError: If script contains dangerous patterns
         """
-        # Check blocked substrings (same as check_command for shell commands)
+        # Use Paragon if configured
+        if self._paragon is not None:
+            self._paragon.validate_script(script)
+            return
+
+        # Fall back to built-in validation
+        self._check_blocked_substrings(script)
+        self._check_blocked_patterns(script)
+        self._check_dangerous_command_patterns(script)
+        self._check_code_injection_patterns(script)
+        self._check_allowlist(script)
+
+    @staticmethod
+    def _check_blocked_substrings(script: str) -> None:
+        """Check script for blocked substrings."""
         for substring in BLOCKED_SUBSTRINGS:
             if substring in script:
                 raise SecurityError(
                     f"Script contains blocked substring: '{substring}'"
                 )
 
-        # Check blocked patterns
+    def _check_blocked_patterns(self, script: str) -> None:
+        """Check script for blocked regex patterns."""
         for pattern, compiled in zip(self._blocked_patterns, self._compiled_patterns):
             if compiled.search(script):
                 raise SecurityError(
                     f"Script contains blocked pattern: '{pattern}'"
                 )
 
-        # Check for dangerous argument forwarding patterns
-        # These can be used to bypass security by passing dangerous args at runtime
-        dangerous_arg_patterns = [
-            (r'\$\{?[@*]\'?', "positional parameter expansion ($@ or $*)"),
-            (r'\$\{?\d+\}?', "positional parameter ($1, $2, etc.)"),
-            (r'\$[A-Za-z_][A-Za-z0-9_]*', "variable expansion (could be dangerous)"),
+    @staticmethod
+    def _check_dangerous_command_patterns(script: str) -> None:
+        """Check for dangerous commands with variable argument forwarding."""
+        dangerous_commands = [
+            "rm", "chmod", "chown", "dd", "mkfs", "fdisk", "parted",
+            "shutdown", "reboot", "poweroff", "halt", "curl", "wget",
+            "nc", "netcat", "ssh", "scp", "rsync"
         ]
-
-        # Only warn about these patterns if they appear in potentially dangerous contexts
-        # (e.g., directly after a dangerous command like rm, chmod, dd, etc.)
-        dangerous_commands = ["rm", "chmod", "chown", "dd", "mkfs", "fdisk", "parted",
-                              "shutdown", "reboot", "poweroff", "halt", "curl", "wget"]
 
         for line in script.split("\n"):
             line = line.strip()
             if not line or line.startswith("#"):
                 continue
 
-            # Check for dangerous command followed by unquoted variable expansion
             for cmd in dangerous_commands:
-                # Pattern: dangerous_cmd followed by variable that could expand to dangerous args
-                # e.g., "rm $@", "rm $1", "rm ${1}", "rm $*"
-                pattern = rf'\b{cmd}\s+[^#]*\$(\{{)?[@*0-9]+(\}})?'
+                pattern = rf'\b{cmd}\s+.*?["\']?\$(\{{)?[@*0-9]+(\}})?["\']?'
                 if re.search(pattern, line):
                     raise SecurityError(
                         f"Script contains dangerous command '{cmd}' with variable "
@@ -119,28 +147,44 @@ class ToolRegistry:
                         f"validation instead."
                     )
 
-        # Check allowlist if configured
-        if self._tool_allowlist is not None:
-            # Extract commands from script (first word of each non-comment line)
-            # Shell metacharacters (pipes, redirects, etc.) are allowed to enable
-            # natural Unix workflows. Security is enforced via BLOCKED_PATTERNS
-            # and BLOCKED_SUBSTRINGS for dangerous commands.
-            lines = script.strip().split("\n")
-            for line in lines:
-                line = line.strip()
-                if not line or line.startswith("#"):
-                    continue
-                # Extract first token (command)
-                tokens = line.split()
-                if tokens:
-                    cmd = tokens[0]
-                    # Remove any leading special chars (pipes, redirects, etc.)
-                    cmd = re.sub(r"^[|;&<>]+", "", cmd)
-                    if cmd and cmd not in self._tool_allowlist:
-                        raise SecurityError(
-                            f"Command '{cmd}' is not in the allowlist. "
-                            f"Allowed: {sorted(self._tool_allowlist)}"
-                        )
+    @staticmethod
+    def _check_code_injection_patterns(script: str) -> None:
+        """Check for code injection patterns (eval, exec, dynamic execution)."""
+        injection_patterns = [
+            (r'\beval\b.*\$', "eval with variable expansion"),
+            (r'\bexec\b.*\$', "exec with variable expansion"),
+            (r'\bbash\s+(-[a-zA-Z]+\s+)*["\']?\$', "bash with variable (script injection)"),
+            (r'\bsh\s+(-[a-zA-Z]+\s+)*["\']?\$', "sh with variable (script injection)"),
+            (r'\bsource\b.*\$', "source with variable expansion"),
+            (r'\.\s+["\']?\$', "dot-source with variable expansion"),
+        ]
+        for pattern, description in injection_patterns:
+            if re.search(pattern, script, re.IGNORECASE):
+                raise SecurityError(
+                    f"Script contains potentially dangerous pattern: {description}. "
+                    f"This could allow code injection attacks."
+                )
+
+    def _check_allowlist(self, script: str) -> None:
+        """Check script commands against allowlist if configured."""
+        if self._tool_allowlist is None:
+            return
+
+        lines = script.strip().split("\n")
+        for line in lines:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+
+            tokens = line.split()
+            if tokens:
+                cmd = tokens[0]
+                cmd = re.sub(r"^[|;&<>]+", "", cmd)
+                if cmd and cmd not in self._tool_allowlist:
+                    raise SecurityError(
+                        f"Command '{cmd}' is not in the allowlist. "
+                        f"Allowed: {sorted(self._tool_allowlist)}"
+                    )
 
     def create_tool(
         self,
@@ -440,7 +484,7 @@ class ToolRegistry:
                     created_by=created_by,
                 )
                 imported += 1
-            except (SecurityError, ValueError) as e:
+            except (SecurityError, ValueError):
                 # Skip tools that fail validation
                 pass
         

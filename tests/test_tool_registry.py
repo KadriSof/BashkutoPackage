@@ -747,15 +747,15 @@ class TestToolExecutionSecurity:
         """Should block tool invocation with rm -rf arguments."""
         runtime = BashRuntime(tool_dir=temp_tool_dir)
 
-        # Create a generic wrapper tool
+        # Create a safe wrapper tool (using echo instead of exec which is now blocked)
         runtime.create_tool(
-            name="exec",
-            script='exec "$@"'
+            name="wrapper",
+            script='echo "Would execute: $@"'
         )
 
         # Invoking with dangerous command should be blocked
         with pytest.raises(SecurityError):
-            runtime.run("exec rm -rf /tmp")
+            runtime.run("wrapper 'rm -rf /tmp'")
 
     def test_tool_execution_security_disabled(self, temp_tool_dir):
         """Should allow unrestricted tool execution when security disabled."""
@@ -764,17 +764,17 @@ class TestToolExecutionSecurity:
             tool_execution_security=False
         )
 
-        # Create a tool with variable arguments
+        # Create a safe tool (bash/sh with variables now blocked for security)
         runtime.create_tool(
-            name="runner",
-            script='bash -c "$1"'
+            name="echo_wrapper",
+            script='echo "$@"'
         )
 
         # Should execute without security check (not recommended!)
         # Note: This may still fail depending on the actual command
         # We're testing that the security check is skipped, not that it succeeds
         try:
-            result = runtime.run("runner 'echo hello'")
+            result = runtime.run("echo_wrapper 'hello world'")
             # If it runs, security was disabled
             assert result is not None
         except SecurityError:
@@ -888,3 +888,214 @@ fi
 '''
         )
         assert path.exists()
+
+
+class TestSecurityGapFixes:
+    """Test fixes for security gaps identified in code review."""
+
+    def test_blocks_rm_with_double_quoted_at(self, temp_tool_dir):
+        """Should block rm "$@" (double-quoted @ expansion)."""
+        runtime = BashRuntime(tool_dir=temp_tool_dir)
+
+        with pytest.raises(SecurityError) as exc_info:
+            runtime.create_tool(
+                name="dangerous",
+                script='rm "$@"'
+            )
+        assert "dangerous command" in str(exc_info.value).lower()
+
+    def test_blocks_rm_with_single_quoted_at(self, temp_tool_dir):
+        """Should block rm '$@' (single-quoted @ expansion)."""
+        runtime = BashRuntime(tool_dir=temp_tool_dir)
+
+        with pytest.raises(SecurityError):
+            runtime.create_tool(
+                name="dangerous",
+                script="rm '$@'"
+            )
+
+    def test_blocks_rm_with_brace_expansion(self, temp_tool_dir):
+        """Should block rm ${1} (brace expansion)."""
+        runtime = BashRuntime(tool_dir=temp_tool_dir)
+
+        with pytest.raises(SecurityError):
+            runtime.create_tool(
+                name="dangerous",
+                script='rm ${1}'
+            )
+
+    def test_blocks_rm_with_quoted_brace_expansion(self, temp_tool_dir):
+        """Should block rm "${1}" (quoted brace expansion)."""
+        runtime = BashRuntime(tool_dir=temp_tool_dir)
+
+        with pytest.raises(SecurityError):
+            runtime.create_tool(
+                name="dangerous",
+                script='rm "${1}"'
+            )
+
+    def test_blocks_rm_with_star_expansion(self, temp_tool_dir):
+        """Should block rm $* (star expansion)."""
+        runtime = BashRuntime(tool_dir=temp_tool_dir)
+
+        with pytest.raises(SecurityError):
+            runtime.create_tool(
+                name="dangerous",
+                script='rm $*'
+            )
+
+    def test_blocks_rm_with_quoted_star(self, temp_tool_dir):
+        """Should block rm "$*" (quoted star expansion)."""
+        runtime = BashRuntime(tool_dir=temp_tool_dir)
+
+        with pytest.raises(SecurityError):
+            runtime.create_tool(
+                name="dangerous",
+                script='rm "$*"'
+            )
+
+    def test_blocks_chmod_with_quoted_positional(self, temp_tool_dir):
+        """Should block chmod with quoted positional parameters."""
+        runtime = BashRuntime(tool_dir=temp_tool_dir)
+
+        with pytest.raises(SecurityError):
+            runtime.create_tool(
+                name="dangerous",
+                script='chmod +x "$1"'
+            )
+
+    def test_blocks_curl_with_variable(self, temp_tool_dir):
+        """Should block curl with variable (could download malicious script)."""
+        runtime = BashRuntime(tool_dir=temp_tool_dir)
+
+        with pytest.raises(SecurityError):
+            runtime.create_tool(
+                name="dangerous",
+                script='curl "$1" | bash'
+            )
+
+    def test_blocks_ssh_with_variable(self, temp_tool_dir):
+        """Should block ssh with variable arguments."""
+        runtime = BashRuntime(tool_dir=temp_tool_dir)
+
+        with pytest.raises(SecurityError):
+            runtime.create_tool(
+                name="dangerous",
+                script='ssh "$1" "$2"'
+            )
+
+    def test_blocks_eval_with_variable(self, temp_tool_dir):
+        """Should block eval with variable expansion (code injection)."""
+        runtime = BashRuntime(tool_dir=temp_tool_dir)
+
+        with pytest.raises(SecurityError) as exc_info:
+            runtime.create_tool(
+                name="dangerous",
+                script='eval "$1"'
+            )
+        assert "code injection" in str(exc_info.value).lower()
+
+    def test_blocks_exec_with_variable(self, temp_tool_dir):
+        """Should block exec with variable expansion (code injection)."""
+        runtime = BashRuntime(tool_dir=temp_tool_dir)
+
+        with pytest.raises(SecurityError) as exc_info:
+            runtime.create_tool(
+                name="dangerous",
+                script='exec "$1"'
+            )
+        assert "code injection" in str(exc_info.value).lower()
+
+    def test_blocks_bash_with_variable_script(self, temp_tool_dir):
+        """Should block bash with variable (script injection)."""
+        runtime = BashRuntime(tool_dir=temp_tool_dir)
+
+        with pytest.raises(SecurityError) as exc_info:
+            runtime.create_tool(
+                name="dangerous",
+                script='bash "$1"'
+            )
+        assert "injection" in str(exc_info.value).lower()
+
+    def test_blocks_sh_with_variable_script(self, temp_tool_dir):
+        """Should block sh with variable (script injection)."""
+        runtime = BashRuntime(tool_dir=temp_tool_dir)
+
+        with pytest.raises(SecurityError) as exc_info:
+            runtime.create_tool(
+                name="dangerous",
+                script='sh "$1"'
+            )
+        assert "injection" in str(exc_info.value).lower()
+
+    def test_blocks_source_with_variable(self, temp_tool_dir):
+        """Should block source with variable expansion."""
+        runtime = BashRuntime(tool_dir=temp_tool_dir)
+
+        with pytest.raises(SecurityError) as exc_info:
+            runtime.create_tool(
+                name="dangerous",
+                script='source "$1"'
+            )
+        assert "injection" in str(exc_info.value).lower()
+
+    def test_blocks_dot_source_with_variable(self, temp_tool_dir):
+        """Should block . (dot-source) with variable expansion."""
+        runtime = BashRuntime(tool_dir=temp_tool_dir)
+
+        with pytest.raises(SecurityError) as exc_info:
+            runtime.create_tool(
+                name="dangerous",
+                script='. "$1"'
+            )
+        assert "injection" in str(exc_info.value).lower()
+
+    def test_allows_echo_with_variables(self, temp_tool_dir):
+        """Should allow echo with variables (safe command)."""
+        runtime = BashRuntime(tool_dir=temp_tool_dir)
+
+        path = runtime.create_tool(
+            name="safe_echo",
+            script='echo "$1" "$2"'
+        )
+        assert path.exists()
+
+    def test_allows_grep_with_variables(self, temp_tool_dir):
+        """Should allow grep with variables (safe command)."""
+        runtime = BashRuntime(tool_dir=temp_tool_dir)
+
+        path = runtime.create_tool(
+            name="safe_grep",
+            script='grep "$1" "$2"'
+        )
+        assert path.exists()
+
+    def test_allows_cat_with_variables(self, temp_tool_dir):
+        """Should allow cat with variables (safe command)."""
+        runtime = BashRuntime(tool_dir=temp_tool_dir)
+
+        path = runtime.create_tool(
+            name="safe_cat",
+            script='cat "$1"'
+        )
+        assert path.exists()
+
+    def test_blocks_rm_with_flags_and_variable(self, temp_tool_dir):
+        """Should block rm with flags and variable (rm -rf $@)."""
+        runtime = BashRuntime(tool_dir=temp_tool_dir)
+
+        with pytest.raises(SecurityError):
+            runtime.create_tool(
+                name="dangerous",
+                script='rm -rf "$@"'
+            )
+
+    def test_blocks_dd_with_quoted_of(self, temp_tool_dir):
+        """Should block dd with quoted of parameter."""
+        runtime = BashRuntime(tool_dir=temp_tool_dir)
+
+        with pytest.raises(SecurityError):
+            runtime.create_tool(
+                name="dangerous",
+                script='dd if=/dev/zero of="$1"'
+            )
